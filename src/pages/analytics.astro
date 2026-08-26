@@ -1,0 +1,19 @@
+---
+-- Hours per project, last 7 days (stacked bar: x=day, series=project)
+SELECT p.name, p.color,
+       date(s.start_time / 1000, 'unixepoch', 'localtime') AS day,
+       SUM(s.accumulated_ms) / 3600000.0 AS hours
+FROM sessions s JOIN projects p ON p.id = s.project_id
+WHERE s.status = 'completed'
+  AND s.start_time >= (unixepoch('now', '-6 days', 'start of day') * 1000)
+GROUP BY p.id, day
+ORDER BY day;
+
+-- Cognitive load distribution (doughnut), weighted by real time, not session count
+SELECT COALESCE(difficulty, 'unrated') AS difficulty,
+       COUNT(*) AS sessions,
+       SUM(accumulated_ms) / 3600000.0 AS hours
+FROM sessions
+WHERE status = 'completed' AND start_time >= (unixepoch('now', '-6 days', 'start of day') * 1000)
+GROUP BY 1;
+---

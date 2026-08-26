@@ -1,0 +1,40 @@
+---
+// src/components/SyncBadge.astro
+---
+<sync-badge class="fixed bottom-3 right-3 select-none text-xs opacity-70 hover:opacity-100">
+  <span data-dot>🟡</span><span data-label class="ml-1"></span>
+</sync-badge>
+
+<script>
+  const DOT = { synced: "🟢", syncing: "🟡", offline: "🔴" } as const;
+  const LABEL = { synced: "Synced", syncing: "Syncing", offline: "Offline" } as const;
+
+  class SyncBadge extends HTMLElement {
+    #dot = this.querySelector("[data-dot]")!;
+    #label = this.querySelector("[data-label]")!;
+
+    connectedCallback() {
+      this.#poll();
+      setInterval(() => this.#poll(), 5000);
+      // Browser-level connectivity hints -> force a server-side flush immediately.
+      addEventListener("online", () => this.#poll(true));
+      addEventListener("offline", () => this.#paint({ state: "offline", lastSyncAt: 0 }));
+      document.addEventListener("visibilitychange", () => !document.hidden && this.#poll(true));
+      document.addEventListener("deepwork:mutated", () => this.#poll(true));
+    }
+
+    async #poll(force = false) {
+      try {
+        const r = await fetch("/api/sync", { method: force ? "POST" : "GET" });
+        this.#paint(await r.json());
+      } catch { this.#paint({ state: "offline", lastSyncAt: 0 }); }
+    }
+
+    #paint(s: { state: keyof typeof DOT; lastSyncAt: number }) {
+      this.#dot.textContent = DOT[s.state];
+      this.#label.textContent = LABEL[s.state];
+      this.title = s.lastSyncAt ? `Last sync: ${new Date(s.lastSyncAt).toLocaleTimeString()}` : "Never synced";
+    }
+  }
+  customElements.define("sync-badge", SyncBadge);
+</script>

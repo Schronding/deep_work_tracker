@@ -1,0 +1,50 @@
+# =========================
+# Dependencias
+# =========================
+node_modules/
+
+# =========================
+# Build & Astro
+# =========================
+dist/
+.astro/
+.vercel/
+.netlify/
+
+# =========================
+# Base de Datos (Réplica Embebida)
+# =========================
+# Evita subir los archivos locales de SQLite/Turso a tu repo
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal
+
+# =========================
+# Variables de Entorno
+# =========================
+# ¡Nunca subas tus tokens o URLs de conexión!
+.env
+.env.*
+!.env.example
+
+# =========================
+# Logs y Debugging
+# =========================
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# =========================
+# Sistema Operativo
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# TypeScript
+# =========================
+*.tsbuildinfo

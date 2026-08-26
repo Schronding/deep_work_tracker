@@ -1,0 +1,151 @@
+---
+// src/components/DeepTimer.astro
+import { db } from "../db/client";
+const projects = (await db.execute(
+  "SELECT id,name,color,hotkey FROM projects WHERE archived = 0 ORDER BY hotkey"
+)).rows;
+---
+<deep-timer class="grid place-items-center gap-8">
+  <nav data-projects class="flex flex-wrap justify-center gap-2">
+    {projects.map((p: any) => (
+      <button data-project={p.id} class="btn btn-sm btn-ghost border border-base-content/10"
+              style={`--c:${p.color}`}>
+        <kbd class="kbd kbd-xs">{p.hotkey}</kbd> {p.name}
+      </button>
+    ))}
+  </nav>
+
+  <!-- tabular-nums + fixed ch width: zero layout shift as digits change -->
+  <output data-display
+          class="font-mono text-[18vw] leading-none md:text-[9rem]"
+          style="font-variant-numeric: tabular-nums; min-width: 8ch; text-align:center;">
+    00:00:00
+  </output>
+
+  <div class="flex gap-3">
+    <button data-act="toggle" class="btn btn-primary btn-wide">Play <kbd class="kbd kbd-sm">space</kbd></button>
+    <button data-act="stop" class="btn btn-outline" disabled>Stop <kbd class="kbd kbd-sm">s</kbd></button>
+  </div>
+</deep-timer>
+
+<script>
+  import { elapsedMs, formatHMS, type TimerSnapshot } from "../lib/timer";
+
+  type Session = TimerSnapshot & { id: string; project_id: string; project_name: string };
+
+  class DeepTimer extends HTMLElement {
+    #session: Session | null = null;
+    #skew = 0;              // serverNow - clientNow, recomputed on every fetch
+    #projectId: string | null = null;
+    #lastPaint = "";
+
+    #display = this.querySelector("[data-display]") as HTMLOutputElement;
+    #toggle = this.querySelector('[data-act="toggle"]') as HTMLButtonElement;
+    #stop = this.querySelector('[data-act="stop"]') as HTMLButtonElement;
+
+    connectedCallback() {
+      this.#toggle.onclick = () => this.#onToggle();
+      this.#stop.onclick = () => this.#send("stop", { id: this.#session?.id });
+      this.querySelectorAll<HTMLButtonElement>("[data-project]").forEach(
+        (b) => (b.onclick = () => this.#pick(b.dataset.project!))
+      );
+
+      addEventListener("keydown", this.#keys);
+      // A laptop lid closing freezes rAF and the OS clock drifts: re-pull on wake.
+      document.addEventListener("visibilitychange", () => !document.hidden && this.#pull());
+      addEventListener("online", () => this.#pull());
+      addEventListener("focus", () => this.#pull());
+
+      this.#pull();
+      requestAnimationFrame(this.#loop);
+    }
+
+    #keys = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (document.querySelector("dialog[open]")) return;
+      if (e.code === "Space") { e.preventDefault(); this.#onToggle(); }
+      else if (e.key === "s" && this.#session) this.#send("stop", { id: this.#session.id });
+      else if (/^[1-9]$/.test(e.key)) {
+        const btn = this.querySelector<HTMLButtonElement>(`[data-project] kbd`);
+        const target = [...this.querySelectorAll<HTMLButtonElement>("[data-project]")]
+          .find((b) => b.textContent?.trim().startsWith(e.key));
+        if (target) this.#pick(target.dataset.project!);
+      }
+    };
+
+    /**
+     * Never accumulate ticks. Recompute from absolute timestamps on every frame so
+     * throttled tabs, sleep and GC pauses cannot introduce drift.
+     * Paint only when the rendered string actually changes (~1 DOM write/second).
+     */
+    #loop = () => {
+      const text = formatHMS(elapsedMs(this.#session, Date.now() + this.#skew));
+      if (text !== this.#lastPaint) { this.#display.textContent = this.#lastPaint = text; }
+      requestAnimationFrame(this.#loop);
+    };
+
+    async #pull() {
+      try {
+        const r = await fetch("/api/session", { cache: "no-store" });
+        this.#apply(await r.json());
+      } catch { /* local server unreachable: keep painting from last snapshot */ }
+    }
+
+    async #send(action: string, body: Record<string, unknown> = {}) {
+      const r = await fetch("/api/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, ...body }),
+      });
+      const data = await r.json();
+      if (data.ended) {
+        this.dispatchEvent(new CustomEvent("deepwork:ended", {
+          bubbles: true,
+          detail: { id: data.ended.id, ms: data.ended.accumulated_ms, project: data.ended.project_id },
+        }));
+      }
+      this.#apply(data);
+      document.dispatchEvent(new Event("deepwork:mutated"));
+    }
+
+    /** Server response is authoritative; recalibrate skew on every exchange. */
+    #apply(data: { now: number; session: Session | null }) {
+      this.#skew = data.now - Date.now();
+      this.#session = data.session;
+      this.#projectId = data.session?.project_id ?? this.#projectId;
+      this.#paintControls();
+    }
+
+    #onToggle() {
+      const s = this.#session;
+      if (!s) return this.#projectId ? this.#send("start", { projectId: this.#projectId }) : this.#hintProject();
+      if (s.status === "active") {
+        // Optimistic: close the live segment locally so the UI answers in 0 ms.
+        this.#session = { ...s, accumulated_ms: elapsedMs(s, Date.now() + this.#skew), resumed_at: null, status: "paused" };
+        this.#paintControls();
+        return this.#send("pause", { id: s.id });
+      }
+      this.#session = { ...s, resumed_at: Date.now() + this.#skew, status: "active" };
+      this.#paintControls();
+      return this.#send("resume", { id: s.id });
+    }
+
+    #pick(id: string) {
+      if (this.#session) return;         // project is locked while a session is open
+      this.#projectId = id;
+      this.querySelectorAll<HTMLButtonElement>("[data-project]").forEach((b) =>
+        b.classList.toggle("btn-active", b.dataset.project === id));
+    }
+
+    #hintProject() { this.querySelector("[data-projects]")?.animate(
+      [{ opacity: 0.3 }, { opacity: 1 }], { duration: 180, iterations: 2 }); }
+
+    #paintControls() {
+      const active = this.#session?.status === "active";
+      this.#toggle.firstChild!.textContent = active ? "Pause " : this.#session ? "Resume " : "Play ";
+      this.#stop.disabled = !this.#session;
+      this.dataset.status = this.#session?.status ?? "idle";
+    }
+  }
+  customElements.define("deep-timer", DeepTimer);
+</script>

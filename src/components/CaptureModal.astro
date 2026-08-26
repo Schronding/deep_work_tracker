@@ -1,0 +1,83 @@
+---
+// src/components/CaptureModal.astro
+---
+<capture-modal>
+  <dialog class="modal modal-bottom sm:modal-middle">
+    <div class="modal-box max-w-md">
+      <p class="mb-4 text-center font-mono text-3xl" data-elapsed
+         style="font-variant-numeric: tabular-nums;"></p>
+
+      <div class="mb-4 grid grid-cols-3 gap-2" data-levels>
+        <button data-level="easy"   class="btn btn-sm"><kbd class="kbd kbd-xs">1</kbd> Fácil</button>
+        <button data-level="medium" class="btn btn-sm"><kbd class="kbd kbd-xs">2</kbd> Medio</button>
+        <button data-level="hard"   class="btn btn-sm"><kbd class="kbd kbd-xs">3</kbd> Difícil</button>
+      </div>
+
+      <input data-notes type="text" maxlength="240" autocomplete="off"
+             class="input input-bordered w-full" placeholder="¿Qué se logró?" />
+      <p class="mt-2 text-center text-xs opacity-50">
+        <kbd class="kbd kbd-xs">enter</kbd> guardar · <kbd class="kbd kbd-xs">esc</kbd> guardar sin nota
+      </p>
+    </div>
+  </dialog>
+</capture-modal>
+
+<script>
+  import { formatHMS } from "../lib/timer";
+
+  class CaptureModal extends HTMLElement {
+    #dlg = this.querySelector("dialog")!;
+    #notes = this.querySelector("[data-notes]") as HTMLInputElement;
+    #elapsed = this.querySelector("[data-elapsed]")!;
+    #id: string | null = null;
+    #level: string | null = null;
+
+    connectedCallback() {
+      // The timer component owns the lifecycle; we only react to its end event.
+      document.addEventListener("deepwork:ended", (e: Event) => this.#open(e as CustomEvent));
+
+      this.querySelectorAll<HTMLButtonElement>("[data-level]").forEach(
+        (b) => (b.onclick = () => this.#setLevel(b.dataset.level!, true)));
+
+      this.#dlg.addEventListener("keydown", (e) => {
+        const KEYS: Record<string, string> = { "1": "easy", f: "easy", "2": "medium", m: "medium", "3": "hard", d: "hard" };
+        // Digits/letters only steal focus while the notes field is still untouched.
+        if (document.activeElement !== this.#notes && KEYS[e.key]) {
+          e.preventDefault(); this.#setLevel(KEYS[e.key], true); return;
+        }
+        if (e.key === "Enter") { e.preventDefault(); this.#commit(); }
+      });
+
+      // Esc must NOT discard: the session exists, only metadata would be lost.
+      this.#dlg.addEventListener("cancel", (e) => { e.preventDefault(); this.#commit(); });
+    }
+
+    #open(e: CustomEvent<{ id: string; ms: number }>) {
+      this.#id = e.detail.id;
+      this.#level = null;
+      this.#notes.value = "";
+      this.#elapsed.textContent = formatHMS(e.detail.ms);
+      this.querySelectorAll("[data-level]").forEach((b) => b.classList.remove("btn-primary"));
+      this.#dlg.showModal();
+      // Focus lands on the difficulty row so 1/2/3 work instantly.
+      (this.querySelector("[data-level]") as HTMLButtonElement).focus();
+    }
+
+    #setLevel(level: string, advance = false) {
+      this.#level = level;
+      this.querySelectorAll<HTMLButtonElement>("[data-level]").forEach((b) =>
+        b.classList.toggle("btn-primary", b.dataset.level === level));
+      if (advance) this.#notes.focus();
+    }
+
+    async #commit() {
+      const body = { action: "annotate", id: this.#id, difficulty: this.#level, notes: this.#notes.value };
+      this.#dlg.close();                       // close first: perceived latency = 0
+      await fetch("/api/session", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+      document.dispatchEvent(new Event("deepwork:mutated"));
+    }
+  }
+  customElements.define("capture-modal", CaptureModal);
+</script>
