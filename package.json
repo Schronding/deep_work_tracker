@@ -12,9 +12,15 @@
     "astro": "astro"
   },
   "dependencies": {
+    "@astrojs/node": "^11.1.6",
+    "@libsql/client": "^0.18.0",
     "astro": "^7.2.7"
   },
   "allowScripts": {
     "esbuild": true
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "typescript": "~5.7"
   }
 }
